@@ -71,7 +71,7 @@ def categoryFromOutput(output, data):
 
 def train(args, data, rnn, optimizer, criterion, head):
     """ Train, print logs to stdout, save the (final) model.
-    Each epoch is actually just one training minibatch.
+    Each epoch is actually just one training minibatch, bad terminology.
     """
     start = time.time()
     current_loss = 0
@@ -80,10 +80,14 @@ def train(args, data, rnn, optimizer, criterion, head):
     print("epoch - train_frac - time_since - this_mb_loss - line - guess - correct")
    
     for epoch in range(1, args.n_epochs+1):
+        #category, line, category_tensor, line_tensor = data.random_training_pair()
         category, line, category_tensor, line_tensor = data.random_training_pair()
         if args.cuda:
             category_tensor = category_tensor.cuda()
             line_tensor = line_tensor.cuda()
+
+        sys.exit()
+
         hidden = rnn.initHidden()
         optimizer.zero_grad()
 
@@ -149,7 +153,7 @@ if __name__ == "__main__":
 
     # Load data, build RNN, create optimizer/loss, and train. be sure to move
     # the model to GPU via `.cuda()` _before_ constructing the optimizer.
-    data = Data(args.train_frac, 1.0 - args.train_frac)
+    data = Data(args.train_frac, 1.0-args.train_frac, args.batch_size)
     rnn = RNN(args, data.n_letters, args.n_hidden, data.n_categories)
     if args.cuda:
         rnn.cuda()

@@ -10,7 +10,7 @@ import numpy as np
 
 class Data:
    
-    def __init__(self, train_perc, valid_perc):
+    def __init__(self, train_perc, valid_perc, batch_size):
         """ Lines are the same as (last) names in this context 
         
         Also, when doing train/valid split, we do these splits for each of the
@@ -29,6 +29,8 @@ class Data:
         self.max_all_names  = -1
         self.total_train    = 0
         self.total_valid    = 0
+        self.start          = 0
+        self.batch_size     = batch_size
 
         # Load all the words into `self.category_lines`, one list per language.
         for filename in self.findFiles('../data/names/*.txt'):
@@ -68,6 +70,8 @@ class Data:
         self.y_valid = torch.zeros(self.total_valid)
         self.X_train_lengths = torch.zeros(self.total_train)
         self.X_valid_lengths = torch.zeros(self.total_valid)
+        self.X_train_names = []
+        self.X_valid_names = []
         self._create_torch_data('train')
         self._create_torch_data('valid')
         self._print_debug()
@@ -100,8 +104,10 @@ class Data:
                 # For later, to tell PyTorch to stop further computation
                 if datatype == 'train':
                     self.X_train_lengths[name_idx] = len(name)
+                    self.X_train_names.append(name)
                 elif datatype == 'valid':
                     self.X_valid_lengths[name_idx] = len(name)
+                    self.X_valid_names.append(name)
 
                 # Don't forget!!
                 name_idx += 1
@@ -115,12 +121,20 @@ class Data:
             self.X_train = torch.transpose(self.X_train, 0, 1) # back to original
             self.y_train = self.y_train[inds]
             self.X_train_lengths = self.X_train_lengths[inds]
+            # Can't vectorize. :(
+            tmp = list(self.X_train_names)
+            for idx in range(len(tmp)):
+                self.X_train_names[idx] = tmp[inds[idx]]
         elif datatype == 'valid':
             assert name_idx == self.total_valid
             self.X_valid = torch.transpose(self.X_valid, 0, 1)[inds]
             self.X_valid = torch.transpose(self.X_valid, 0, 1) # back to original
             self.y_valid = self.y_valid[inds]
             self.X_valid_lengths = self.X_valid_lengths[inds]
+            # Can't vectorize. :(
+            tmp = list(self.X_valid_names)
+            for idx in range(len(tmp)):
+                self.X_valid_names[idx] = tmp[inds[idx]]
 
 
     def unicodeToAscii(self, s):
@@ -141,16 +155,9 @@ class Data:
     def letterToIndex(self, letter):
         """ Find letter index from all_letters, e.g. "a" = 0 """
         return self.all_letters.find(letter)
-    
-    # deprecated
-    def lineToTensor(self, line):
-        """ Turn a line into a <line_length x 1 x n_letters>,
-        or an array of one-hot letter vectors
-        """
-        tensor = torch.zeros(len(line), 1, self.n_letters)
-        for li, letter in enumerate(line):
-            tensor[li][0][self.letterToIndex(letter)] = 1
-        return tensor
+
+    def get_minibatch(self, size, cuda):
+        pass
 
     # deprecated
     def random_training_pair(self):
@@ -167,11 +174,6 @@ class Data:
     def findFiles(self, path): 
         return glob.glob(path)
   
-    # deprecated
-    @staticmethod
-    def randomChoice(l):
-        return l[random.randint(0, len(l) - 1)]
-
     def _print_debug(self):
         print("\nFinished loading data.")
         print("    all_letters: {}".format(self.all_letters))
@@ -179,7 +181,8 @@ class Data:
         print("    n_categories: {}".format(self.n_categories))
         print("\n(language) - (num) - (train) - (valid) - (maxlen) - (avglen)")
         for cat in self.all_categories:
-            print("    {0:10}  {1:6}  {2:6}  {3:6}  {4:6}  {5:6.2f}".format(cat, 
+            print("  ({0}) {1:10}  {2:6}  {3:6}  {4:6}  {5:6}  {6:6.2f}".format(
+                    str(self.all_categories.index(cat)).zfill(2), cat, 
                     len(self.category_lines[cat]),
                     len(self.cat_to_names_t[cat]),
                     len(self.cat_to_names_v[cat]),
@@ -191,14 +194,31 @@ class Data:
         print("\nX_train.shape: {}".format(self.X_train.shape))
         print("X_valid.shape: {}\n".format(self.X_valid.shape))
         num = 5
+        print("X_train_names[:{}]:   {}".format(num, self.X_train_names[:num]))
         print("y_train[:{}]:         {}".format(num, self.y_train[:num]))
         print("X_train_lengths[:{}]: {}".format(num, self.X_train_lengths[:num]))
+        print("X_valid_names[:{}]:   {}".format(num, self.X_valid_names[:num]))
         print("y_valid[:{}]:         {}".format(num, self.y_valid[:num]))
         print("X_valid_lengths[:{}]: {}\n".format(num, self.X_valid_lengths[:num]))
         print("DONE\n")
- 
+
+    # deprecated
+    def lineToTensor(self, line):
+        """ Turn a line into a <line_length x 1 x n_letters>,
+        or an array of one-hot letter vectors
+        """
+        tensor = torch.zeros(len(line), 1, self.n_letters)
+        for li, letter in enumerate(line):
+            tensor[li][0][self.letterToIndex(letter)] = 1
+        return tensor
+
+    # deprecated
+    @staticmethod
+    def randomChoice(l):
+        return l[random.randint(0, len(l) - 1)]
+
 
 if __name__ == "__main__":
     train_perc = 0.8
     valid_perc = 1.0 - train_perc
-    d = Data(train_perc=train_perc, valid_perc=valid_perc)
+    d = Data(train_perc=train_perc, valid_perc=valid_perc, batch_size=32)
