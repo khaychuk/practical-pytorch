@@ -5,3 +5,4 @@
 __pycache__
 data/eng-*.txt
 *.csv
+char-rnn-classification/results/
