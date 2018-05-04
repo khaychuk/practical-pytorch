@@ -1,12 +1,11 @@
-import glob
-import unicodedata
-import string, argparse
+import argparse
 import time, os, math, random, sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
 torch.set_printoptions(linewidth=180)
 import numpy as np
+from data import Data
 
 
 # Various helper methods
@@ -61,77 +60,6 @@ class RNN(nn.Module):
 
 
 
-class Data:
-   
-    def __init__(self):
-        """ Builds category_lines dictionary, a list of lines per category """
-        self.all_letters = string.ascii_letters + " .,;'-"
-        self.n_letters = len(self.all_letters)
-        self.category_lines = {}
-        self.all_categories = []
-
-        for filename in self.findFiles('../data/names/*.txt'):
-            category = filename.split('/')[-1].split('.')[0]
-            self.all_categories.append(category)
-            lines = self.readLines(filename)
-            self.category_lines[category] = lines
-        self.n_categories = len(self.all_categories)
-
-        print("Finished loading data.")
-        print("    self.all_letters: {}".format(self.all_letters))
-        print("    self.n_letters: {}".format(self.n_letters))
-        print("    self.n_categories: {}".format(self.n_categories))
-        for cat in self.all_categories:
-            print("    {0:10}  {1:5}".format(cat, len(self.category_lines[cat])))
-        print("")
- 
-    def findFiles(self, path): 
-        return glob.glob(path)
-    
-    def unicodeToAscii(self, s):
-        """ Turn a Unicode string to plain ASCII, thanks to 
-        http://stackoverflow.com/a/518232/2809427
-        """
-        return ''.join(
-            c for c in unicodedata.normalize('NFD', s)
-            if unicodedata.category(c) != 'Mn'
-            and c in self.all_letters
-        )
-    
-    def readLines(self, filename):
-        """ Read a file and split into lines """
-        lines = open(filename).read().strip().split('\n')
-        return [self.unicodeToAscii(line) for line in lines]
-    
-    def letterToIndex(self, letter):
-        """ Find letter index from all_letters, e.g. "a" = 0 """
-        return self.all_letters.find(letter)
-    
-    def lineToTensor(self, line):
-        """ Turn a line into a <line_length x 1 x n_letters>,
-        or an array of one-hot letter vectors
-        """
-        tensor = torch.zeros(len(line), 1, self.n_letters)
-        for li, letter in enumerate(line):
-            tensor[li][0][self.letterToIndex(letter)] = 1
-        return tensor
-
-    def random_training_pair(self):
-        """ `line_tensor` is the rnn input, `category_tensor` is target, i.e.
-        the index of the language corresponding to `line_tensor` 
-        """
-        category        = self.randomChoice(self.all_categories)
-        line            = self.randomChoice(self.category_lines[category])
-        category_tensor = torch.LongTensor([self.all_categories.index(category)])
-        line_tensor     = self.lineToTensor(line)
-        #print("{}\n{}\n{}\n{}".format(category, line, category_tensor, line_tensor))
-        return category, line, category_tensor, line_tensor
-
-    @staticmethod
-    def randomChoice(l):
-        return l[random.randint(0, len(l) - 1)]
-
-
 def categoryFromOutput(output, data):
     """ Pick the highest index (category) from the (log) softmax.
     Returns (category_name, category_index). 
@@ -162,6 +90,7 @@ def train(args, data, rnn, optimizer, criterion, head):
         # Iterate over all letters in the word(s) in mini-batch.
         # output.size(): [batch_size, n_categories]
         # hidden.size(): [batch_size, n_hidden]
+        # TODO: only store output if it comes from the last relevant index
         for i in range(line_tensor.size()[0]):
             output, hidden = rnn(line_tensor[i], hidden)
 
@@ -203,6 +132,7 @@ if __name__ == "__main__":
     parser.add_argument('--learning_rate', type=float, default=0.005)
     parser.add_argument('--momentum', type=float, default=0.0)
     parser.add_argument('--optimizer', type=str, default='sgd')
+    parser.add_argument('--train_frac', type=float, default=0.8)
     args = parser.parse_args()
     args.cuda = torch.cuda.is_available()
     print("Our arguments:\n{}\n".format(args))
@@ -219,7 +149,7 @@ if __name__ == "__main__":
 
     # Load data, build RNN, create optimizer/loss, and train. be sure to move
     # the model to GPU via `.cuda()` _before_ constructing the optimizer.
-    data = Data()
+    data = Data(args.train_frac, 1.0 - args.train_frac)
     rnn = RNN(args, data.n_letters, args.n_hidden, data.n_categories)
     if args.cuda:
         rnn.cuda()
