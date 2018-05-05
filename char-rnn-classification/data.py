@@ -154,6 +154,10 @@ class Data:
         """ Returns a dictionary since there's a lot of info we want """
         ss = self.start
         bs = self.batch_size
+        if ss+bs >= self.total_train:
+            #print("from ss={} to 0".format(ss))
+            ss = 0
+            self.start = 0
 
         mb = {}
         mb['X_data'] = self.X_train[:, ss:ss+bs, :]
@@ -163,8 +167,6 @@ class Data:
         mb['y_cats']  = self.y_train_cats[ss : ss+bs]
        
         self.start += self.batch_size
-        if self.start > self.total_train:
-            self.start = 0
         return mb
 
     # deprecated
