@@ -3,7 +3,7 @@ import time, os, math, random, sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
-torch.set_printoptions(linewidth=180)
+torch.set_printoptions(linewidth=240)
 import numpy as np
 from data import Data
 
@@ -53,7 +53,7 @@ class RNN(nn.Module):
         return output, hidden
 
     def initHidden(self):
-        hid = torch.zeros(1, self.hidden_size)
+        hid = torch.zeros(self.args.batch_size, self.hidden_size)
         if self.args.cuda:
             hid = hid.cuda()
         return hid
@@ -80,30 +80,40 @@ def train(args, data, rnn, optimizer, criterion, head):
     print("epoch - train_frac - time_since - this_mb_loss - line - guess - correct")
    
     for epoch in range(1, args.n_epochs+1):
-        #category, line, category_tensor, line_tensor = data.random_training_pair()
-        category, line, category_tensor, line_tensor = data.random_training_pair()
-        if args.cuda:
-            category_tensor = category_tensor.cuda()
-            line_tensor = line_tensor.cuda()
+        mb = data.get_train_minibatch()
+        maxlen = int(max(mb['X_len']).item())
 
-        sys.exit()
+        # Put last relevant output here since words have different lengths
+        output_real = torch.zeros(args.batch_size, data.n_categories)
+        if args.cuda:
+            output_real = output_real.cuda()
 
         hidden = rnn.initHidden()
         optimizer.zero_grad()
 
-        # Iterate over all letters in the word(s) in mini-batch.
-        # output.size(): [batch_size, n_categories]
-        # hidden.size(): [batch_size, n_hidden]
-        # TODO: only store output if it comes from the last relevant index
-        for i in range(line_tensor.size()[0]):
-            output, hidden = rnn(line_tensor[i], hidden)
+        # ----------------------------------------------------------------------
+        # Iterate over all RELEVANT letters in the word(s) in mini-batch.
+        # output.shape: [batch_size, n_categories]
+        # hidden.shape: [batch_size, n_hidden]
+        # target shape: [batch_size]
+        # ----------------------------------------------------------------------
+        for l_idx in range(1, maxlen+1):
+            output, hidden = rnn(mb['X_data'][l_idx], hidden)
+            finished_words = (mb['X_len'] == l_idx).nonzero().squeeze()
+            output_real[finished_words] = output[finished_words]
+            #print("\nat l_idx={}. finished_words: {}".format(l_idx, finished_words))
+            #print("output:\n{}".format(output))
+            #print("output_real:\n{}".format(output_real))
 
-        loss = criterion(output, category_tensor)
+        # targets (second argument) need to be of type LongTensor.
+        # TODO: better understanding of how this works, 
+        # TODO also if we divide by batch size?
+        loss = criterion(output_real, mb['y_data'])
         loss.backward()
         optimizer.step()
         current_loss += loss
-    
-        # Check whether we got this particular minibatch correct
+
+        # TODO FIX Check whether we got this particular minibatch correct
         if epoch % args.print_every == 0:
             guess, guess_i = categoryFromOutput(output, data)
             correct = '✓' if guess == category else '✗ (%s)' % category
@@ -112,13 +122,13 @@ def train(args, data, rnn, optimizer, criterion, head):
             print("{} {}% ({}) {:.4f} {} / {} {}".format(
                     epoch, frac, t_since, loss, line, guess, correct))
     
-        # Average losses across all minibatches in each plotting interval
+        # TODO FIX Average losses across all minibatches in each plotting interval
         if epoch % args.plot_every == 0:
             all_losses.append(current_loss / args.plot_every)
             all_times.append( (time.time()-start)/(60) )
             current_loss = 0
     
-    # For plotting later
+    # TODO FIX For plotting later
     torch.save(rnn, '{}/char-rnn-classify.pt'.format(head))
     np.savetxt('{}/losses.txt'.format(head), all_losses)
     np.savetxt('{}/times.txt'.format(head), all_times)
@@ -153,7 +163,7 @@ if __name__ == "__main__":
 
     # Load data, build RNN, create optimizer/loss, and train. be sure to move
     # the model to GPU via `.cuda()` _before_ constructing the optimizer.
-    data = Data(args.train_frac, 1.0-args.train_frac, args.batch_size)
+    data = Data(args.train_frac, 1.0-args.train_frac, args.batch_size, args.cuda)
     rnn = RNN(args, data.n_letters, args.n_hidden, data.n_categories)
     if args.cuda:
         rnn.cuda()
@@ -162,7 +172,7 @@ if __name__ == "__main__":
     for name, param in rnn.named_parameters():
         if param.requires_grad:
             print("  {}:  {}".format(name, param.size()))
-    print("")
+    print("RNN on GPU? {}\n".format(next(rnn.parameters()).is_cuda))
 
     optimizer = get_optimizer(args, rnn)
     criterion = nn.NLLLoss()

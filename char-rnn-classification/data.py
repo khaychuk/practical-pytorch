@@ -10,7 +10,7 @@ import numpy as np
 
 class Data:
    
-    def __init__(self, train_perc, valid_perc, batch_size):
+    def __init__(self, train_perc, valid_perc, batch_size, cuda):
         """ Lines are the same as (last) names in this context 
         
         Also, when doing train/valid split, we do these splits for each of the
@@ -31,6 +31,7 @@ class Data:
         self.total_valid    = 0
         self.start          = 0
         self.batch_size     = batch_size
+        self.cuda           = cuda
 
         # Load all the words into `self.category_lines`, one list per language.
         for filename in self.findFiles('../data/names/*.txt'):
@@ -66,19 +67,33 @@ class Data:
         # Create torch data out of above info, w/separate info for lengths
         self.X_train = torch.zeros(L, self.total_train, self.n_letters)
         self.X_valid = torch.zeros(L, self.total_valid, self.n_letters)
-        self.y_train = torch.zeros(self.total_train)
-        self.y_valid = torch.zeros(self.total_valid)
+        self.y_train = torch.zeros(self.total_train, dtype=torch.long)
+        self.y_valid = torch.zeros(self.total_valid, dtype=torch.long)
         self.X_train_lengths = torch.zeros(self.total_train)
         self.X_valid_lengths = torch.zeros(self.total_valid)
+
+        if cuda:
+            self.X_train = self.X_train.cuda()
+            self.X_valid = self.X_valid.cuda()
+            self.y_train = self.y_train.cuda()
+            self.y_valid = self.y_valid.cuda()
+            self.X_train_lengths = self.X_train_lengths.cuda()
+            self.X_valid_lengths = self.X_valid_lengths.cuda()
+
         self.X_train_names = []
         self.X_valid_names = []
+        self.y_train_cats = []
+        self.y_valid_cats = []
         self._create_torch_data('train')
         self._create_torch_data('valid')
         self._print_debug()
           
 
     def _create_torch_data(self, datatype):
-        """ Iterates by category to form torch data; ALSO handles shuffling!! """
+        """ 
+        Iterates by category to form torch data; ALSO handles shuffling!!  At
+        least, if we're dealing with the training data.
+        """
         if datatype == 'train':
             data = self.cat_to_names_t
         elif datatype == 'valid':
@@ -105,9 +120,11 @@ class Data:
                 if datatype == 'train':
                     self.X_train_lengths[name_idx] = len(name)
                     self.X_train_names.append(name)
+                    self.y_train_cats.append(cat)
                 elif datatype == 'valid':
                     self.X_valid_lengths[name_idx] = len(name)
                     self.X_valid_names.append(name)
+                    self.y_valid_cats.append(cat)
 
                 # Don't forget!!
                 name_idx += 1
@@ -122,42 +139,33 @@ class Data:
             self.y_train = self.y_train[inds]
             self.X_train_lengths = self.X_train_lengths[inds]
             # Can't vectorize. :(
-            tmp = list(self.X_train_names)
-            for idx in range(len(tmp)):
-                self.X_train_names[idx] = tmp[inds[idx]]
+            tmp1 = list(self.X_train_names)
+            tmp2 = list(self.y_train_cats)
+            assert len(tmp1) == len(tmp2)
+            for idx in range(len(tmp1)):
+                self.X_train_names[idx] = tmp1[inds[idx]]
+                self.y_train_cats[idx] = tmp2[inds[idx]]
         elif datatype == 'valid':
+            # No need to shuffle here
             assert name_idx == self.total_valid
-            self.X_valid = torch.transpose(self.X_valid, 0, 1)[inds]
-            self.X_valid = torch.transpose(self.X_valid, 0, 1) # back to original
-            self.y_valid = self.y_valid[inds]
-            self.X_valid_lengths = self.X_valid_lengths[inds]
-            # Can't vectorize. :(
-            tmp = list(self.X_valid_names)
-            for idx in range(len(tmp)):
-                self.X_valid_names[idx] = tmp[inds[idx]]
 
 
-    def unicodeToAscii(self, s):
-        """ Turn a Unicode string to plain ASCII, thanks to 
-        http://stackoverflow.com/a/518232/2809427
-        """
-        return ''.join(
-            c for c in unicodedata.normalize('NFD', s)
-            if unicodedata.category(c) != 'Mn'
-            and c in self.all_letters
-        )
-    
-    def readLines(self, filename):
-        """ Read a file and split into lines """
-        lines = open(filename).read().strip().split('\n')
-        return [self.unicodeToAscii(line) for line in lines]
-    
-    def letterToIndex(self, letter):
-        """ Find letter index from all_letters, e.g. "a" = 0 """
-        return self.all_letters.find(letter)
+    def get_train_minibatch(self):
+        """ Returns a dictionary since there's a lot of info we want """
+        ss = self.start
+        bs = self.batch_size
 
-    def get_minibatch(self, size, cuda):
-        pass
+        mb = {}
+        mb['X_data'] = self.X_train[:, ss:ss+bs, :]
+        mb['y_data'] = self.y_train[ss : ss+bs]
+        mb['X_len']  = self.X_train_lengths[ss : ss+bs]
+        mb['X_names'] = self.X_train_names[ss : ss+bs]
+        mb['y_cats']  = self.y_train_cats[ss : ss+bs]
+       
+        self.start += self.batch_size
+        if self.start > self.total_train:
+            self.start = 0
+        return mb
 
     # deprecated
     def random_training_pair(self):
@@ -195,12 +203,35 @@ class Data:
         print("X_valid.shape: {}\n".format(self.X_valid.shape))
         num = 5
         print("X_train_names[:{}]:   {}".format(num, self.X_train_names[:num]))
+        print("y_train_cats[:{}]:    {}".format(num, self.y_train_cats[:num]))
         print("y_train[:{}]:         {}".format(num, self.y_train[:num]))
-        print("X_train_lengths[:{}]: {}".format(num, self.X_train_lengths[:num]))
+        print("X_train_lengths[:{}]: {}\n".format(num, self.X_train_lengths[:num]))
         print("X_valid_names[:{}]:   {}".format(num, self.X_valid_names[:num]))
+        print("y_valid_cats[:{}]:    {}".format(num, self.y_valid_cats[:num]))
         print("y_valid[:{}]:         {}".format(num, self.y_valid[:num]))
-        print("X_valid_lengths[:{}]: {}\n".format(num, self.X_valid_lengths[:num]))
+        print("X_valid_lengths[:{}]: {}".format(num, self.X_valid_lengths[:num]))
+        print("\nX_train.is_cuda: {}".format(self.X_train.is_cuda))
+        print("X_valid.is_cuda: {}\n".format(self.X_valid.is_cuda))
         print("DONE\n")
+
+    def unicodeToAscii(self, s):
+        """ Turn a Unicode string to plain ASCII, thanks to 
+        http://stackoverflow.com/a/518232/2809427
+        """
+        return ''.join(
+            c for c in unicodedata.normalize('NFD', s)
+            if unicodedata.category(c) != 'Mn'
+            and c in self.all_letters
+        )
+    
+    def readLines(self, filename):
+        """ Read a file and split into lines """
+        lines = open(filename).read().strip().split('\n')
+        return [self.unicodeToAscii(line) for line in lines]
+    
+    def letterToIndex(self, letter):
+        """ Find letter index from all_letters, e.g. "a" = 0 """
+        return self.all_letters.find(letter)
 
     # deprecated
     def lineToTensor(self, line):
@@ -221,4 +252,4 @@ class Data:
 if __name__ == "__main__":
     train_perc = 0.8
     valid_perc = 1.0 - train_perc
-    d = Data(train_perc=train_perc, valid_perc=valid_perc, batch_size=32)
+    d = Data(train_perc=train_perc, valid_perc=valid_perc, batch_size=32, cuda=True)
